@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# データCSV（個人データ含む可能性あり）
+data/
+
+# 不要なモデルファイル（使用するものだけ残す）
+models/lgbm_model_A.pkl
+models/lgbm_model_v2.pkl
+models/lgbm_model_v3.pkl
+models/lgbm_model_v4.pkl
+models/lgbm_model.pkl
+models/feature_importance*.csv
+
+# OS
+.DS_Store
