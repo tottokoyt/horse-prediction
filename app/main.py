@@ -24,6 +24,7 @@ class PredictRequest(BaseModel):
     sire:        Optional[str]   = None
     trainer:     Optional[str]   = None
     farm:        Optional[str]   = None
+    bms:         Optional[str]   = None
     sex:         Optional[str]   = None
     birth_month: Optional[int]   = None
     price:       Optional[float] = None

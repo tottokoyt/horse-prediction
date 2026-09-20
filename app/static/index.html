@@ -365,7 +365,7 @@
   <span class="logo">🏇</span>
   <div>
     <h1>競走馬 回収率予測システム</h1>
-    <div class="sub">一口馬主 回収率予測モデル（LightGBM v6）</div>
+    <div class="sub">一口馬主 回収率予測モデル（LightGBM v7）</div>
   </div>
 </header>
 
@@ -386,6 +386,10 @@
     <div class="field">
       <label>生産牧場</label>
       <input type="text" id="farm" placeholder="例: ノーザンファーム">
+    </div>
+    <div class="field">
+      <label>母父（BMS）</label>
+      <input type="text" id="bms" placeholder="例: シンボリクリスエス">
     </div>
 
     <div class="row2">
@@ -528,6 +532,7 @@ async function doPrediction() {
     sire:        val('sire')        || null,
     trainer:     val('trainer')     || null,
     farm:        val('farm')        || null,
+    bms:         val('bms')         || null,
     sex:         val('sex')         || null,
     birth_month: intVal('birth_month'),
     price:       floatVal('price'),

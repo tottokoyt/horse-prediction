@@ -37,7 +37,7 @@ _models: dict = {}
 
 
 def load_models():
-    for key, fname in [("A", "lgbm_model_A_v6.pkl"), ("B", "lgbm_model_B.pkl")]:
+    for key, fname in [("A", "lgbm_model_A_v7.pkl"), ("B", "lgbm_model_B.pkl")]:
         path = MODEL_DIR / fname
         if path.exists():
             _models[key] = joblib.load(path)
@@ -87,8 +87,11 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
             "weight": req.weight,
         })
 
-    for col in ["sire", "trainer", "farm"]:
-        val = getattr(req, col, None)
+    # bms_name（母父）はモデルAのみ・リクエスト属性名は bms
+    arg_name_map = {"bms_name": "bms"}
+    for col in aggs.keys():
+        arg_name = arg_name_map.get(col, col)
+        val = getattr(req, arg_name, None)
         m, o, c = _lookup(val, aggs.get(col), col)
         row[f"{col}_smooth_mean"]    = m
         row[f"{col}_smooth_over200"] = o
@@ -117,12 +120,15 @@ def build_factors(req, saved: dict) -> list:
 
     # 厩舎 / 牧場 / 父馬
     col_labels = [
-        ("trainer", f"調教師（{req.trainer or '不明'}）"),
-        ("farm",    f"牧場（{req.farm or '不明'}）"),
-        ("sire",    f"父馬（{req.sire or '不明'}）"),
+        ("trainer",  "trainer", f"調教師（{req.trainer or '不明'}）"),
+        ("farm",     "farm",    f"牧場（{req.farm or '不明'}）"),
+        ("sire",     "sire",    f"父馬（{req.sire or '不明'}）"),
+        ("bms_name", "bms",     f"母父（{req.bms or '不明'}）"),
     ]
-    for col, label in col_labels:
-        val = getattr(req, col, None)
+    for col, arg_name, label in col_labels:
+        if col not in aggs:
+            continue
+        val = getattr(req, arg_name, None)
         m, o, c = _lookup(val, aggs.get(col), col)
         if c == 0:
             factors.append({
