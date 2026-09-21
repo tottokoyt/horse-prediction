@@ -37,7 +37,7 @@ _models: dict = {}
 
 
 def load_models():
-    for key, fname in [("A", "lgbm_model_A_v7.pkl"), ("B", "lgbm_model_B.pkl")]:
+    for key, fname in [("A", "lgbm_model_A_v9.pkl"), ("B", "lgbm_model_B.pkl")]:
         path = MODEL_DIR / fname
         if path.exists():
             _models[key] = joblib.load(path)
@@ -68,6 +68,23 @@ def _lookup(value, stats_df, key_col):
     )
 
 
+# ── リクエスト属性 → 集計キー値の解決 ─────────────────────────
+# bms_name（母父）はモデルAのみ・リクエスト属性名は bms
+# nick（配合ニック）はリクエストに直接の属性がなく、sire×bms から組み立てる
+_ARG_NAME_MAP = {"bms_name": "bms"}
+
+
+def _resolve_value(req, col: str):
+    if col == "nick":
+        sire = getattr(req, "sire", None)
+        bms  = getattr(req, "bms", None)
+        if sire and bms:
+            return f"{sire}×{bms}"
+        return None
+    arg_name = _ARG_NAME_MAP.get(col, col)
+    return getattr(req, arg_name, None)
+
+
 # ── 特徴量 DataFrame 生成 ──────────────────────────────────────
 def build_feature_row(req, saved: dict) -> pd.DataFrame:
     aggs         = saved["aggs"]
@@ -87,11 +104,8 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
             "weight": req.weight,
         })
 
-    # bms_name（母父）はモデルAのみ・リクエスト属性名は bms
-    arg_name_map = {"bms_name": "bms"}
     for col in aggs.keys():
-        arg_name = arg_name_map.get(col, col)
-        val = getattr(req, arg_name, None)
+        val = _resolve_value(req, col)
         m, o, c = _lookup(val, aggs.get(col), col)
         row[f"{col}_smooth_mean"]    = m
         row[f"{col}_smooth_over200"] = o
@@ -118,17 +132,19 @@ def build_factors(req, saved: dict) -> list:
     aggs    = saved["aggs"]
     factors = []
 
-    # 厩舎 / 牧場 / 父馬
+    # 厩舎 / 牧場 / 父馬 / 母父 / 配合ニック（父×母父）
+    nick_label = f"配合ニック（{req.sire or '不明'}×{req.bms or '不明'}）"
     col_labels = [
-        ("trainer",  "trainer", f"調教師（{req.trainer or '不明'}）"),
-        ("farm",     "farm",    f"牧場（{req.farm or '不明'}）"),
-        ("sire",     "sire",    f"父馬（{req.sire or '不明'}）"),
-        ("bms_name", "bms",     f"母父（{req.bms or '不明'}）"),
+        ("trainer",  f"調教師（{req.trainer or '不明'}）"),
+        ("farm",     f"牧場（{req.farm or '不明'}）"),
+        ("sire",     f"父馬（{req.sire or '不明'}）"),
+        ("bms_name", f"母父（{req.bms or '不明'}）"),
+        ("nick",     nick_label),
     ]
-    for col, arg_name, label in col_labels:
+    for col, label in col_labels:
         if col not in aggs:
             continue
-        val = getattr(req, arg_name, None)
+        val = _resolve_value(req, col)
         m, o, c = _lookup(val, aggs.get(col), col)
         if c == 0:
             factors.append({
