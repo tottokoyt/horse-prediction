@@ -37,7 +37,7 @@ _models: dict = {}
 
 
 def load_models():
-    for key, fname in [("A", "lgbm_model_A_v9.pkl"), ("B", "lgbm_model_B.pkl")]:
+    for key, fname in [("A", "lgbm_model_A_v9.pkl"), ("B", "lgbm_model_B_v7.pkl")]:
         path = MODEL_DIR / fname
         if path.exists():
             _models[key] = joblib.load(path)
