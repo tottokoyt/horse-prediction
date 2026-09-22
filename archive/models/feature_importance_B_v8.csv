@@ -1,0 +1,16 @@
+﻿feature,importance
+trainer_smooth_over200,1200
+bms_name_smooth_over200,1157
+bms_name_smooth_mean,1131
+trainer_smooth_mean,1078
+bms_name_count,1025
+price_man,967
+trainer_count,865
+farm_smooth_over200,727
+farm_smooth_mean,631
+farm_count,513
+sex_num,263
+sire_smooth_over200,202
+birth_month,167
+sire_smooth_mean,158
+sire_count,41
