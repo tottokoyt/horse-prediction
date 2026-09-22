@@ -4,6 +4,15 @@ validate_banushi.py
 DMMバヌーシーの実データで検証し、eval_utils.compare_to_noise_floor()で
 既知クラブのノイズフロアと比較する。
 
+【重要】train_model_kakutoku.py はバヌーシー自身の53頭を学習プールに
+含めるようになった（experiment_add_banushi.pyのCV検証で採用）ため、
+このスクリプトで「デプロイ済みモデル」をバヌーシー53頭に対して評価すると
+in-sample（学習済みデータを評価に使う）になり、汎化性能の指標として
+不正確。バヌーシーを学習に含めるかどうかの判断自体は
+experiment_add_banushi.py の5-fold CV（バヌーシーを学習から外した
+out-of-sample評価）を正とすること。このスクリプトは今後「バヌーシー以外の
+新規クラブ」の実データ検証に使うのが適切。
+
 前提データ:
   data/jisseki_banushi.csv          (collect_jisseki_banushi.py)
   data/banushi_pedigree_cache.csv   (fetch_banushi_pedigree.py)
