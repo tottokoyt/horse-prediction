@@ -7,20 +7,20 @@ from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
+import shap
 
 # ── 定数（ここを変更してロジック調整） ────────────────────────
 GLOBAL_MEAN          = 80.0   # 全体平均回収率のデフォルト値（%）
 GLOBAL_OVER200       = 0.18   # 全体の200%超率のデフォルト値
-IMPACT_POS_THRESHOLD = 15.0   # smooth_mean が GLOBAL_MEAN + この値以上 → positive
-IMPACT_NEG_THRESHOLD = -15.0  # smooth_mean が GLOBAL_MEAN + この値以下 → negative
 
-# 管囲しきい値
-CANNON_GOOD  = 21.0   # この値以上 → positive
-CANNON_POOR  = 19.5   # この値以下 → negative
+TARGET_CLASS  = 2      # SHAPで説明する対象クラス（2 = 200%超）
+SHAP_EPSILON  = 0.02   # |SHAP合計| がこれ未満なら neutral 扱い
 
-# 体重しきい値
-WEIGHT_LARGE = 460    # この値以上 → positive
-WEIGHT_SMALL = 430    # この値以下 → negative
+# 測尺（cannon/weight）は表示用のタグ付けのみに使用（判定自体はSHAP由来）
+CANNON_GOOD  = 21.0   # この値以上 → 「太め・骨量あり」タグ
+CANNON_POOR  = 19.5   # この値以下 → 「細め・骨量懸念」タグ
+WEIGHT_LARGE = 460    # この値以上 → 「大型馬」タグ
+WEIGHT_SMALL = 430    # この値以下 → 「小型・軽量」タグ
 
 # 判定しきい値
 VERDICT_PROB_POSITIVE = 0.35  # prob_class2 >= → 有望候補
@@ -34,6 +34,7 @@ MODEL_DIR = Path(__file__).parent.parent / "models"
 
 # ── モデル管理 ─────────────────────────────────────────────────
 _models: dict = {}
+_explainers: dict = {}
 
 
 def load_models():
@@ -41,6 +42,7 @@ def load_models():
         path = MODEL_DIR / fname
         if path.exists():
             _models[key] = joblib.load(path)
+            _explainers[key] = shap.TreeExplainer(_models[key]["model"])
             print(f"[predictor] モデル{key} 読み込み完了: {path}")
         else:
             print(f"[predictor] 警告: モデル{key} が見つかりません: {path}")
@@ -51,6 +53,27 @@ def _get_model(use_scale: bool):
     if key not in _models:
         raise RuntimeError(f"モデル{key}が読み込まれていません")
     return key, _models[key]
+
+
+def _shap_contributions(model_key: str, X: pd.DataFrame) -> dict:
+    """
+    1件分の特徴量行について、TARGET_CLASS（200%超）確率への
+    SHAP寄与度を特徴量名 -> 値 の辞書で返す
+    """
+    explainer = _explainers[model_key]
+    shap_values = explainer.shap_values(X)
+    row = shap_values[TARGET_CLASS][0]
+    return dict(zip(X.columns, row))
+
+
+# 集計特徴量（sire/trainer/farm/bms_name/nick/club_name）は
+# {col}_smooth_mean / {col}_smooth_over200 / {col}_count の3特徴量に
+# 分かれているため、SHAP寄与度は合算して「そのファクター全体の寄与」とする
+def _grouped_shap(col: str, shap_map: dict) -> float:
+    return sum(
+        shap_map.get(f"{col}_{suffix}", 0.0)
+        for suffix in ("smooth_mean", "smooth_over200", "count")
+    )
 
 
 # ── 集計特徴量の取得 ───────────────────────────────────────────
@@ -119,16 +142,15 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
 
 
 # ── ファクター生成 ─────────────────────────────────────────────
-def _impact(smooth_mean: float) -> str:
-    diff = smooth_mean - GLOBAL_MEAN
-    if diff >= IMPACT_POS_THRESHOLD:
+def _impact_from_shap(shap_value: float) -> str:
+    if shap_value >= SHAP_EPSILON:
         return "positive"
-    if diff <= IMPACT_NEG_THRESHOLD:
+    if shap_value <= -SHAP_EPSILON:
         return "negative"
     return "neutral"
 
 
-def build_factors(req, saved: dict) -> list:
+def build_factors(req, saved: dict, shap_map: dict) -> list:
     aggs    = saved["aggs"]
     factors = []
 
@@ -146,61 +168,57 @@ def build_factors(req, saved: dict) -> list:
             continue
         val = _resolve_value(req, col)
         m, o, c = _lookup(val, aggs.get(col), col)
+        shap_val = _grouped_shap(col, shap_map)
         if c == 0:
             factors.append({
                 "name":   label,
                 "value":  "データなし（学習データ未登録）",
-                "impact": "neutral",
+                "impact": _impact_from_shap(shap_val),
+                "shap":   round(shap_val, 4),
             })
         else:
             factors.append({
                 "name":   label,
                 "value":  f"平均回収率 {m:.0f}%・200%超率 {o*100:.0f}%（{c}頭実績）",
-                "impact": _impact(m),
+                "impact": _impact_from_shap(shap_val),
+                "shap":   round(shap_val, 4),
             })
 
-    # 測尺
+    # 測尺（判定はSHAP寄与度に基づき、cm/kgのタグは参考表示のみ）
     if req.cannon is not None:
-        if req.cannon >= CANNON_GOOD:
-            imp = "positive"
-            tag = "太め・骨量あり"
-        elif req.cannon <= CANNON_POOR:
-            imp = "negative"
-            tag = "細め・骨量懸念"
-        else:
-            imp = "neutral"
-            tag = "標準"
+        tag = "太め・骨量あり" if req.cannon >= CANNON_GOOD else \
+              "細め・骨量懸念" if req.cannon <= CANNON_POOR else "標準"
+        shap_val = shap_map.get("cannon", 0.0)
         factors.append({
             "name":   "管囲",
             "value":  f"{req.cannon}cm（{tag}）",
-            "impact": imp,
+            "impact": _impact_from_shap(shap_val),
+            "shap":   round(shap_val, 4),
         })
 
     if req.weight is not None:
-        if req.weight >= WEIGHT_LARGE:
-            imp = "positive"
-            tag = "大型馬"
-        elif req.weight <= WEIGHT_SMALL:
-            imp = "negative"
-            tag = "小型・軽量"
-        else:
-            imp = "neutral"
-            tag = "標準"
+        tag = "大型馬" if req.weight >= WEIGHT_LARGE else \
+              "小型・軽量" if req.weight <= WEIGHT_SMALL else "標準"
+        shap_val = shap_map.get("weight", 0.0)
         factors.append({
             "name":   "体重",
             "value":  f"{req.weight}kg（{tag}）",
-            "impact": imp,
+            "impact": _impact_from_shap(shap_val),
+            "shap":   round(shap_val, 4),
         })
 
     # 生月
     if req.birth_month:
-        if req.birth_month <= 2:
-            factors.append({"name": "生月", "value": f"{req.birth_month}月生まれ（早生まれ有利）",   "impact": "positive"})
-        elif req.birth_month >= 5:
-            factors.append({"name": "生月", "value": f"{req.birth_month}月生まれ（遅生まれ注意）", "impact": "negative"})
-        else:
-            factors.append({"name": "生月", "value": f"{req.birth_month}月生まれ",                "impact": "neutral"})
+        shap_val = shap_map.get("birth_month", 0.0)
+        factors.append({
+            "name":   "生月",
+            "value":  f"{req.birth_month}月生まれ",
+            "impact": _impact_from_shap(shap_val),
+            "shap":   round(shap_val, 4),
+        })
 
+    # 寄与度の大きい順に並べ替え（|SHAP|降順）
+    factors.sort(key=lambda f: abs(f["shap"]), reverse=True)
     return factors
 
 
@@ -222,13 +240,15 @@ def run_predict(req) -> dict:
         v is not None for v in [req.height, req.chest, req.cannon, req.weight]
     )
     model_key, saved = _get_model(use_scale)
-    proba      = saved["model"].predict_proba(build_feature_row(req, saved))[0].tolist()
+    X          = build_feature_row(req, saved)
+    proba      = saved["model"].predict_proba(X)[0].tolist()
     pred_class = int(np.argmax(proba))
+    shap_map   = _shap_contributions(model_key, X)
 
     return {
         "model_used": model_key,
         "pred_class": pred_class,
         "prob":       proba,
         "verdict":    get_verdict(pred_class, proba),
-        "factors":    build_factors(req, saved),
+        "factors":    build_factors(req, saved, shap_map),
     }

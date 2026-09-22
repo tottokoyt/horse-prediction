@@ -8,3 +8,4 @@ pandas
 requests
 beautifulsoup4
 pdfplumber
+shap
