@@ -41,7 +41,8 @@ def load_banushi(years=TRAIN_YEARS):
 
 
 def predict_with_deployed_model(df):
-    """デプロイ済み models/lgbm_model_kakutoku.pkl を使って予測する"""
+    """デプロイ済み models/lgbm_model_kakutoku.pkl（huber+lambdarankアンサンブル）
+    を使って予測する"""
     predictor.load_models()
     saved = predictor._models["C"]
     preds = []
@@ -53,14 +54,20 @@ def predict_with_deployed_model(df):
         r.sex, r.birth_month, r.price = row["sex"], None, row["price_man"]
         r.height = r.chest = r.cannon = r.weight = None
         X = predictor.build_feature_row(r, saved)
-        preds.append(saved["model"].predict(X)[0])
+        preds.append(predictor._ensemble_kakutoku(saved, X))
     return np.array(preds)
 
 
 def build_known_club_results(seed=42):
-    """11クラブでleave-one-club-outし、known club_resultsを作る（ノイズフロア用）
+    """11クラブでleave-one-club-outし、known club_resultsを作る（ノイズフロア用）。
+    デプロイ済みモデルC（huber+lambdarankアンサンブル）と同じ方式で
+    スコアリングする（バッチ内パーセンタイル順位の平均、train_model_kakutoku.py
+    の ensemble_score_batch と同じロジック）。
     experiment_loco.py の load_combined() は内部で TRAIN_YEARS(2018-2021)に
     固定フィルタしているため、ここでも常に同じ年度範囲になる"""
+    from scipy.stats import rankdata
+    from train_model_kakutoku import make_relevance
+
     combined = el.load_combined()
     clubs = sorted(combined["club_name"].unique())
     results = {}
@@ -73,16 +80,25 @@ def build_known_club_results(seed=42):
         tr = el.add_features(train_df, aggs)
         te = el.add_features(test_df, aggs)
         fc = el.get_feature_cols(tr)
-        X_tr, y_tr = tr[fc].fillna(-1), tr["kakutoku_man"]
+        X_tr = tr[fc].fillna(-1)
         X_te = te[fc].fillna(-1)
-        model = lgb.LGBMRegressor(
+
+        huber = lgb.LGBMRegressor(
             objective="huber", n_estimators=300, learning_rate=0.05, max_depth=4,
             num_leaves=15, min_child_samples=15, subsample=0.8, colsample_bytree=0.8,
             reg_alpha=1.0, reg_lambda=1.0, random_state=seed, verbose=-1,
         )
-        model.fit(X_tr, y_tr)
-        pred = model.predict(X_te)
-        results[club] = (pred, te["kaishuu_rate"].values)
+        huber.fit(X_tr, tr["kakutoku_man"])
+        rank = lgb.LGBMRanker(
+            objective="lambdarank", n_estimators=300, learning_rate=0.05, max_depth=4,
+            num_leaves=15, min_child_samples=15, subsample=0.8, colsample_bytree=0.8,
+            reg_alpha=1.0, reg_lambda=1.0, random_state=seed, verbose=-1,
+        )
+        rank.fit(X_tr, make_relevance(tr["kaishuu_rate"]), group=[len(X_tr)])
+
+        hp, rp = huber.predict(X_te), rank.predict(X_te)
+        ensemble_score = rankdata(hp) / len(hp) + rankdata(rp) / len(rp)
+        results[club] = (ensemble_score, te["kaishuu_rate"].values)
     return results
 
 

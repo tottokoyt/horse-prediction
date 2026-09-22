@@ -42,8 +42,12 @@ def load_models():
                         ("C", "lgbm_model_kakutoku.pkl")]:
         path = MODEL_DIR / fname
         if path.exists():
-            _models[key] = joblib.load(path)
-            _explainers[key] = shap.TreeExplainer(_models[key]["model"])
+            saved = joblib.load(path)
+            _models[key] = saved
+            # モデルC（kakutoku）は huber回帰 + lambdarank のランクアンサンブル。
+            # SHAPによるファクター説明は解釈しやすいhuber_modelを使う
+            explain_target = saved["huber_model"] if key == "C" else saved["model"]
+            _explainers[key] = shap.TreeExplainer(explain_target)
             print(f"[predictor] モデル{key} 読み込み完了: {path}")
         else:
             print(f"[predictor] 警告: モデル{key} が見つかりません: {path}")
@@ -314,18 +318,38 @@ def build_general_factors(req, saved: dict, shap_map: dict) -> list:
     return factors
 
 
+def _percentile_of(value: float, reference: np.ndarray) -> float:
+    return float((reference < value).mean())
+
+
+def _ensemble_kakutoku(saved: dict, X: pd.DataFrame) -> float:
+    """
+    huber回帰の予測（万円単位の絶対値）とlambdarankの予測（学習データ内での
+    相対スコアのみで単位を持たない）を、学習プール全体でのパーセンタイル
+    順位に変換してから平均し、huber分布の同パーセンタイル値に逆変換して
+    万円単位の1つの予測値に戻す（train_model_kakutoku.pyのdocstring参照）。
+    """
+    huber_pred = float(saved["huber_model"].predict(X)[0])
+    rank_pred  = float(saved["rank_model"].predict(X)[0])
+    huber_pct = _percentile_of(huber_pred, saved["ref_huber_preds"])
+    rank_pct  = _percentile_of(rank_pred, saved["ref_rank_scores"])
+    ensemble_pct = (huber_pct + rank_pct) / 2
+    return float(np.quantile(saved["ref_huber_preds"], ensemble_pct))
+
+
 def run_general_predict(req) -> Optional[dict]:
     """
-    モデルC: 獲得賞金を回帰予測し、募集金額（price）が入力されていれば
-    回収率換算値も返す。クラブを問わず学習しているため、シルク以外の
-    未知のクラブ（例: DMMバヌーシー）の馬にも同じロジックで使える。
+    モデルC: 獲得賞金を予測し（huber回帰+lambdarankのランクアンサンブル）、
+    募集金額（price）が入力されていれば回収率換算値も返す。クラブを問わず
+    学習しているため、シルク以外の未知のクラブ（例: DMMバヌーシー）の馬にも
+    同じロジックで使える。
     """
     if "C" not in _models:
         return None
 
     saved = _models["C"]
     X = build_feature_row(req, saved)
-    pred_kakutoku_man = float(saved["model"].predict(X)[0])
+    pred_kakutoku_man = _ensemble_kakutoku(saved, X)
     pred_kaishuu_rate = (
         pred_kakutoku_man / req.price * 100 if req.price else None
     )
