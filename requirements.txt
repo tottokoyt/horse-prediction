@@ -5,3 +5,6 @@ scikit-learn
 joblib
 numpy
 pandas
+requests
+beautifulsoup4
+pdfplumber
