@@ -503,6 +503,22 @@
           <div id="factors-list"></div>
         </div>
 
+        <div class="factors-section" id="general-section" style="display:none;">
+          <div class="factors-title">
+            クラブ横断モデル（獲得賞金ベース・参考値）
+            <span class="verdict-badge" id="general-verdict-badge" style="margin-left:8px;"></span>
+          </div>
+          <p style="font-size:12px; color:var(--text2); margin:0 0 12px;">
+            シルクに限らず全クラブのデータで学習した汎用モデルの予測です。
+            募集金額から回収率を逆算しているため、シルク以外のクラブの馬にも参考になります。
+          </p>
+          <p style="font-size:14px; margin:0 0 12px;">
+            予測獲得賞金: <strong id="general-kakutoku">-</strong>万円
+            <span id="general-kaishuu-wrap"> ／ 予測回収率: <strong id="general-kaishuu">-</strong>%</span>
+          </p>
+          <div id="general-factors-list"></div>
+        </div>
+
       </div>
     </div>
 
@@ -595,6 +611,35 @@ function renderResult(data) {
       <div class="factor-value">${f.value}</div>
     </div>
   `).join('');
+
+  // クラブ横断モデル（獲得賞金ベース）
+  const generalSection = document.getElementById('general-section');
+  if (data.general) {
+    generalSection.style.display = '';
+    document.getElementById('general-kakutoku').textContent = data.general.pred_kakutoku_man.toLocaleString();
+    const kaishuuWrap = document.getElementById('general-kaishuu-wrap');
+    if (data.general.pred_kaishuu_rate !== null) {
+      kaishuuWrap.style.display = '';
+      document.getElementById('general-kaishuu').textContent = data.general.pred_kaishuu_rate;
+    } else {
+      kaishuuWrap.style.display = 'none';
+    }
+    const gVerdictEl = document.getElementById('general-verdict-badge');
+    gVerdictEl.textContent = data.general.verdict || '';
+    gVerdictEl.className = 'verdict-badge ' + verdictClass(data.general.verdict || '');
+    gVerdictEl.style.display = data.general.verdict ? '' : 'none';
+
+    const gList = document.getElementById('general-factors-list');
+    gList.innerHTML = data.general.factors.map(f => `
+      <div class="factor-row">
+        <div class="factor-dot ${f.impact}"></div>
+        <div class="factor-name">${f.name}</div>
+        <div class="factor-value">${f.value}</div>
+      </div>
+    `).join('');
+  } else {
+    generalSection.style.display = 'none';
+  }
 
   document.getElementById('result-content').classList.add('active');
 

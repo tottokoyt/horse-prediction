@@ -26,15 +26,25 @@ CAP = 200.0
 DEFAULT_SEEDS = 5
 
 
-def _evaluate_once(model, X_vl, df_vl, cap=CAP):
-    proba = model.predict_proba(X_vl)
+def _default_score_fn(model, X_vl):
+    """分類モデル（LGBMClassifier, num_class=3）用: 200%超クラスの確率でランキング"""
+    return model.predict_proba(X_vl)[:, 2]
+
+
+def regression_score_fn(model, X_vl):
+    """回帰モデル（LGBMRegressor）用: 予測回収率そのものでランキング"""
+    return model.predict(X_vl)
+
+
+def _evaluate_once(model, X_vl, df_vl, cap=CAP, score_fn=_default_score_fn):
+    score = score_fn(model, X_vl)
 
     df_eval = df_vl[["kaishuu_rate"]].copy().reset_index(drop=True)
-    df_eval["prob_class2"] = proba[:, 2]
+    df_eval["score"] = score
     df_eval["kaishuu_rate_capped"] = df_eval["kaishuu_rate"].clip(upper=cap)
 
-    thr   = df_eval["prob_class2"].quantile(0.75)
-    top25 = df_eval[df_eval["prob_class2"] >= thr]
+    thr   = df_eval["score"].quantile(0.75)
+    top25 = df_eval[df_eval["score"] >= thr]
 
     raw_avg    = top25["kaishuu_rate"].mean()
     capped_avg = top25["kaishuu_rate_capped"].mean()
@@ -42,17 +52,19 @@ def _evaluate_once(model, X_vl, df_vl, cap=CAP):
     return raw_avg, capped_avg, o200_rate
 
 
-def evaluate_stable(build_model_fn, X_tr, y_tr, X_vl, df_vl, cap=CAP, seeds=DEFAULT_SEEDS, label=""):
+def evaluate_stable(build_model_fn, X_tr, y_tr, X_vl, df_vl, cap=CAP, seeds=DEFAULT_SEEDS, label="", score_fn=_default_score_fn):
     """
     build_model_fn(seed) -> 学習済みモデル を複数seed分呼び出し、
     raw / capped 上位25%平均回収率と200%超率の平均±標準偏差を返す。
 
     「生の回収率・単一seed」だけを見て改善判定しないための共通経路。
+    score_fn(model, X_vl) -> array でランキングに使うスコアを取り出す
+    （分類モデルなら200%超確率、回帰モデルなら予測値そのもの）。
     """
     scores = []
     for seed in range(seeds):
         model = build_model_fn(seed)
-        scores.append(_evaluate_once(model, X_vl, df_vl, cap))
+        scores.append(_evaluate_once(model, X_vl, df_vl, cap, score_fn))
     s = np.array(scores)
 
     result = {

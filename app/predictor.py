@@ -38,7 +38,8 @@ _explainers: dict = {}
 
 
 def load_models():
-    for key, fname in [("A", "lgbm_model_A_v9.pkl"), ("B", "lgbm_model_B_v7.pkl")]:
+    for key, fname in [("A", "lgbm_model_A_v9.pkl"), ("B", "lgbm_model_B_v7.pkl"),
+                        ("C", "lgbm_model_kakutoku.pkl")]:
         path = MODEL_DIR / fname
         if path.exists():
             _models[key] = joblib.load(path)
@@ -57,12 +58,16 @@ def _get_model(use_scale: bool):
 
 def _shap_contributions(model_key: str, X: pd.DataFrame) -> dict:
     """
-    1件分の特徴量行について、TARGET_CLASS（200%超）確率への
-    SHAP寄与度を特徴量名 -> 値 の辞書で返す
+    1件分の特徴量行について、SHAP寄与度を特徴量名 -> 値 の辞書で返す。
+    分類モデル（A/B）は TARGET_CLASS（200%超）確率への寄与、
+    回帰モデル（C, kakutoku_man）は予測値そのものへの寄与。
     """
     explainer = _explainers[model_key]
     shap_values = explainer.shap_values(X)
-    row = shap_values[TARGET_CLASS][0]
+    if isinstance(shap_values, list):
+        row = shap_values[TARGET_CLASS][0]
+    else:
+        row = shap_values[0]
     return dict(zip(X.columns, row))
 
 
@@ -78,7 +83,12 @@ def _grouped_shap(col: str, shap_map: dict) -> float:
 
 # ── 集計特徴量の取得 ───────────────────────────────────────────
 def _lookup(value, stats_df, key_col):
-    """stats_df から 1件の smooth_mean / smooth_over200 / count を返す"""
+    """
+    stats_df から 1件の smooth_mean / smooth_over200 / count を返す。
+    モデルC（kakutoku）の集計テーブルには smooth_over200 列が無いため、
+    その場合はデフォルト値で補う。
+    """
+    over200_col = f"{key_col}_smooth_over200"
     if stats_df is None or not value:
         return GLOBAL_MEAN, GLOBAL_OVER200, 0
     row = stats_df[stats_df[key_col].astype(str) == str(value)]
@@ -86,7 +96,7 @@ def _lookup(value, stats_df, key_col):
         return GLOBAL_MEAN, GLOBAL_OVER200, 0
     return (
         float(row[f"{key_col}_smooth_mean"].values[0]),
-        float(row[f"{key_col}_smooth_over200"].values[0]),
+        float(row[over200_col].values[0]) if over200_col in row.columns else GLOBAL_OVER200,
         int(row[f"{key_col}_count"].values[0]),
     )
 
@@ -234,6 +244,90 @@ def get_verdict(pred_class: int, proba: list) -> str:
     return "中程度"
 
 
+def get_general_verdict(pred_kaishuu_rate: Optional[float]) -> Optional[str]:
+    if pred_kaishuu_rate is None:
+        return None
+    if pred_kaishuu_rate >= 200:
+        return "有望候補"
+    if pred_kaishuu_rate >= 100:
+        return "検討候補"
+    return "慎重に検討"
+
+
+# ── モデルC（獲得賞金・クラブ非依存汎用モデル）のファクター ──────
+def build_general_factors(req, saved: dict, shap_map: dict) -> list:
+    """
+    モデルCは全クラブ共通の sire/trainer/farm/bms_name/生月/募集価格のみを
+    使う（測尺・配合ニックは使わない）ため、モデルA/Bとは別の一覧を作る。
+    """
+    aggs    = saved["aggs"]
+    factors = []
+
+    col_labels = [
+        ("trainer",  f"調教師（{req.trainer or '不明'}）"),
+        ("farm",     f"牧場（{req.farm or '不明'}）"),
+        ("sire",     f"父馬（{req.sire or '不明'}）"),
+        ("bms_name", f"母父（{req.bms or '不明'}）"),
+    ]
+    for col, label in col_labels:
+        if col not in aggs:
+            continue
+        val = _resolve_value(req, col)
+        m, o, c = _lookup(val, aggs.get(col), col)
+        shap_val = _grouped_shap(col, shap_map)
+        if c == 0:
+            factors.append({
+                "name":   label,
+                "value":  "データなし（学習データ未登録）",
+                "impact": _impact_from_shap(shap_val),
+                "shap":   round(shap_val, 4),
+            })
+        else:
+            factors.append({
+                "name":   label,
+                "value":  f"平均回収率 {m:.0f}%・200%超率 {o*100:.0f}%（{c}頭実績・全クラブ横断）",
+                "impact": _impact_from_shap(shap_val),
+                "shap":   round(shap_val, 4),
+            })
+
+    if req.birth_month:
+        shap_val = shap_map.get("birth_month", 0.0)
+        factors.append({
+            "name":   "生月",
+            "value":  f"{req.birth_month}月生まれ",
+            "impact": _impact_from_shap(shap_val),
+            "shap":   round(shap_val, 4),
+        })
+
+    factors.sort(key=lambda f: abs(f["shap"]), reverse=True)
+    return factors
+
+
+def run_general_predict(req) -> Optional[dict]:
+    """
+    モデルC: 獲得賞金を回帰予測し、募集金額（price）が入力されていれば
+    回収率換算値も返す。クラブを問わず学習しているため、シルク以外の
+    未知のクラブ（例: DMMバヌーシー）の馬にも同じロジックで使える。
+    """
+    if "C" not in _models:
+        return None
+
+    saved = _models["C"]
+    X = build_feature_row(req, saved)
+    pred_kakutoku_man = float(saved["model"].predict(X)[0])
+    pred_kaishuu_rate = (
+        pred_kakutoku_man / req.price * 100 if req.price else None
+    )
+    shap_map = _shap_contributions("C", X)
+
+    return {
+        "pred_kakutoku_man": round(pred_kakutoku_man, 1),
+        "pred_kaishuu_rate": round(pred_kaishuu_rate, 1) if pred_kaishuu_rate is not None else None,
+        "verdict":           get_general_verdict(pred_kaishuu_rate),
+        "factors":           build_general_factors(req, saved, shap_map),
+    }
+
+
 # ── メイン予測 ─────────────────────────────────────────────────
 def run_predict(req) -> dict:
     use_scale = all(
@@ -251,4 +345,5 @@ def run_predict(req) -> dict:
         "prob":       proba,
         "verdict":    get_verdict(pred_class, proba),
         "factors":    build_factors(req, saved, shap_map),
+        "general":    run_general_predict(req),
     }
