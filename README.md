@@ -60,6 +60,8 @@ python train_model_B_v7.py   # モデルB（測尺なし）: BMS 追加版
 # 11. FastAPIサーバー起動
 uvicorn app.main:app --reload
 # app/predictor.py が読み込むモデルを指定（現在: A=v9, B=v7）
+# 起動時にSHAP（shap.TreeExplainer）を初期化するため、初回リクエストが
+# 返るまで（numbaのJITコンパイルで）15〜20秒ほどかかる場合があります
 ```
 
 ## 出力CSVの主要カラム
@@ -91,6 +93,39 @@ sire・trainer・farm・bms_name（母父）ごとの smooth_mean / smooth_over2
 モデルAには `nick`（父×母父の組み合わせ＝配合ニック）を追加。集計プールはシルク単独では
 サンプルが薄く過学習しやすいため、他クラブ（jisseki_other_all.csv + bms_other_cache.csv +
 sire_other_cache.csv）の学習年度データを合わせて集計している。
+
+## Webアプリの影響要因（ファクター）表示
+
+`app/predictor.py` は各ファクター（父馬・母父・配合ニック・調教師・牧場・測尺等）の
+positive/negative判定を、固定閾値のヒューリスティックではなく **SHAP値**
+（`shap.TreeExplainer`、200%超クラスの確率への寄与度）に基づいて行っている。
+ファクターはSHAP寄与度の絶対値が大きい順に並ぶ。
+
+## モデル改善実験の評価ルール（重要）
+
+上位25%平均回収率のような指標は検証頭数が少なく（シルク検証156頭、200%超は
+8頭のみ）、1頭の外れ値やLightGBMの内部乱数（seed）次第で数値が大きく動く。
+実際、他クラブ測尺統合の実験（train_model_v10〜v12.py、下記）では単一seed・
+生の回収率で「効果あり」に見えた設定が、複数seed平均＋回収率200%キャップで
+再検証すると効果なしと判明した。
+
+**今後モデルの改善案を比較するときは、必ず `eval_utils.py` の
+`evaluate_stable()` を使い、複数seedの平均±標準偏差で判断すること。**
+v9（現行デプロイ中モデル）の正式ベースラインは
+`capped上位25%平均回収率 = 56.6 ± 1.4`、`200%超率 = 10.3% ± 0.0%`（5seed平均）。
+
+## 他クラブ測尺統合の実験（保留中）
+
+`train_model_v10.py` 〜 `v12.py` は、Wayback Machine上に残っていた
+キャロットクラブ公式アーカイブ（募集時測尺）を `fetch_carrot_scale.py` /
+`fetch_mother_other.py` / `merge_carrot_scale.py` で復元し（242頭中227頭が
+マッチ）、モデルAの実学習行をシルク単独634頭から861頭に拡張する実験。
+club_name分布差補正・他クラブ行のダウンウェイトなど複数の工夫を試したが、
+`sweep_weight_capped.py` での複数seed・capped指標による再検証の結果、
+**どの設定もシルク単独ベースラインを上回れなかった**（詳細は各スクリプトの
+docstring参照）。効果が確認でき次第 `app/predictor.py` に反映する想定だが、
+現時点では保留。再開する場合は他クラブ・他年度（tokyo/normandyのアーカイブ等）
+でサンプル数を増やす方向を検討する。
 
 ## 注意事項
 
