@@ -77,6 +77,21 @@ def extract_sire(soup: BeautifulSoup):
     return None
 
 
+def extract_mother(soup: BeautifulSoup):
+    """
+    umadb個別ページから母馬名を抽出する
+    ページ内に <div>　母 <a href="...">馬名</a></div> がある
+    （「母父」は別途「母父」始まりのdivなので、「母」始まり単独のdivのみ拾う）
+    """
+    for div in soup.find_all("div"):
+        text = div.get_text(strip=True)
+        if text.startswith("母") and not text.startswith("母父"):
+            a = div.find("a")
+            if a:
+                return a.get_text(strip=True)
+    return None
+
+
 def load_cache() -> pd.DataFrame:
     """既存キャッシュを読み込む"""
     if CACHE_FILE.exists():
