@@ -8,4 +8,4 @@ pandas
 requests
 beautifulsoup4
 pdfplumber
-shap
+shap==0.44.1

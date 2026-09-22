@@ -61,13 +61,24 @@ def _shap_contributions(model_key: str, X: pd.DataFrame) -> dict:
     1件分の特徴量行について、SHAP寄与度を特徴量名 -> 値 の辞書で返す。
     分類モデル（A/B）は TARGET_CLASS（200%超）確率への寄与、
     回帰モデル（C, kakutoku_man）は予測値そのものへの寄与。
+
+    shapライブラリはバージョンによって多クラス分類のshap_values()の
+    返り値の形が異なる（古い版: クラスごとの配列のlist、新しい版:
+    (n_samples, n_features, n_classes) の3次元配列）ため、両方に対応する。
     """
     explainer = _explainers[model_key]
     shap_values = explainer.shap_values(X)
     if isinstance(shap_values, list):
-        row = shap_values[TARGET_CLASS][0]
+        # 旧shap: [class0の(n_samples, n_features), class1の(...), ...]
+        row = np.asarray(shap_values[TARGET_CLASS])[0]
     else:
-        row = shap_values[0]
+        arr = np.asarray(shap_values)
+        if arr.ndim == 3:
+            # 新shap: (n_samples, n_features, n_classes)
+            row = arr[0, :, TARGET_CLASS]
+        else:
+            # 回帰・2値分類: (n_samples, n_features)
+            row = arr[0]
     return dict(zip(X.columns, row))
 
 
