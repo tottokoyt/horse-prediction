@@ -447,6 +447,47 @@
 </div>
 
 <script>
+// ── 入力値の保持（リロード対策） ──────────────────────────────
+// 直前の入力をブラウザ内（localStorage）に保存し、リロード時に復元する。
+// 最後の入力から INPUT_TTL_MS 以上経っていたら復元せずに捨てる。
+// プライベートブラウズ等で localStorage が使えない場合は何もしない。
+const INPUT_STORAGE_KEY = 'horsePredictionInputs';
+const INPUT_TTL_MS = 24 * 60 * 60 * 1000;
+const INPUT_IDS = ['sire', 'trainer', 'farm', 'bms', 'sex', 'birth_month', 'price',
+                   'height', 'chest', 'cannon', 'weight'];
+
+function saveInputs() {
+  const values = {};
+  INPUT_IDS.forEach(id => { values[id] = document.getElementById(id).value; });
+  values['use-scale'] = document.getElementById('use-scale').checked;
+  try {
+    localStorage.setItem(INPUT_STORAGE_KEY, JSON.stringify({ savedAt: Date.now(), values }));
+  } catch (e) { /* 保存できなくても予測には影響しない */ }
+}
+
+function restoreInputs() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(INPUT_STORAGE_KEY));
+  } catch (e) { return; }
+  if (!saved || !saved.values) return;
+  if (Date.now() - saved.savedAt > INPUT_TTL_MS) {
+    try { localStorage.removeItem(INPUT_STORAGE_KEY); } catch (e) {}
+    return;
+  }
+  INPUT_IDS.forEach(id => {
+    if (saved.values[id] !== undefined) document.getElementById(id).value = saved.values[id];
+  });
+  document.getElementById('use-scale').checked = !!saved.values['use-scale'];
+  toggleScale();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  restoreInputs();
+  document.querySelector('.form-panel').addEventListener('input', saveInputs);
+  document.querySelector('.form-panel').addEventListener('change', saveInputs);
+});
+
 function toggleScale() {
   const cb = document.getElementById('use-scale');
   const fields = document.getElementById('scale-fields');
