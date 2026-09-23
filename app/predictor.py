@@ -14,7 +14,13 @@ GLOBAL_MEAN          = 80.0   # 全体平均回収率のデフォルト値（%�
 GLOBAL_OVER200       = 0.18   # 全体の200%超率のデフォルト値
 
 TARGET_CLASS  = 2      # SHAPで説明する対象クラス（2 = 200%超）
-SHAP_EPSILON  = 0.02   # |SHAP合計| がこれ未満なら neutral 扱い
+SHAP_EPSILON  = 0.02   # モデルA/B（分類確率0〜1スケール）用: |SHAP合計| がこれ未満ならneutral扱い
+# モデルC（huber回帰、2026-09-23よりlog1p(kakutoku_man)スケール）用。
+# A/Bとは出力スケールが全く異なるため別定数にした。実際の学習済みモデルで
+# 60頭サンプルのSHAP値を計測したところ、trainer/farm/sire/bms_nameの
+# |SHAP|中央値は0.2〜0.7、10パーセンタイルでも0.05〜0.2程度だったため、
+# それより十分小さい0.05を「ほぼ寄与なし」の閾値とした。
+SHAP_EPSILON_C = 0.05
 
 # 測尺（cannon/weight）は表示用のタグ付けのみに使用（判定自体はSHAP由来）
 CANNON_GOOD  = 21.0   # この値以上 → 「太め・骨量あり」タグ
@@ -193,10 +199,10 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
 
 
 # ── ファクター生成 ─────────────────────────────────────────────
-def _impact_from_shap(shap_value: float) -> str:
-    if shap_value >= SHAP_EPSILON:
+def _impact_from_shap(shap_value: float, epsilon: float = SHAP_EPSILON) -> str:
+    if shap_value >= epsilon:
         return "positive"
-    if shap_value <= -SHAP_EPSILON:
+    if shap_value <= -epsilon:
         return "negative"
     return "neutral"
 
@@ -320,14 +326,14 @@ def build_general_factors(req, saved: dict, shap_map: dict) -> list:
             factors.append({
                 "name":   label,
                 "value":  "データなし（学習データ未登録）",
-                "impact": _impact_from_shap(shap_val),
+                "impact": _impact_from_shap(shap_val, SHAP_EPSILON_C),
                 "shap":   round(shap_val, 4),
             })
         else:
             factors.append({
                 "name":   label,
                 "value":  f"平均回収率 {m:.0f}%・200%超率 {o*100:.0f}%（{c}頭実績・全クラブ横断）",
-                "impact": _impact_from_shap(shap_val),
+                "impact": _impact_from_shap(shap_val, SHAP_EPSILON_C),
                 "shap":   round(shap_val, 4),
             })
 
@@ -336,7 +342,7 @@ def build_general_factors(req, saved: dict, shap_map: dict) -> list:
         factors.append({
             "name":   "生月",
             "value":  f"{req.birth_month}月生まれ",
-            "impact": _impact_from_shap(shap_val),
+            "impact": _impact_from_shap(shap_val, SHAP_EPSILON_C),
             "shap":   round(shap_val, 4),
         })
 
