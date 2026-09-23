@@ -97,21 +97,47 @@ def _grouped_shap(col: str, shap_map: dict) -> float:
 
 
 # ── 集計特徴量の取得 ───────────────────────────────────────────
-def _lookup(value, stats_df, key_col):
+def _lookup(value, stats_df, key_col, fallback_medians=None):
     """
     stats_df から 1件の smooth_mean / smooth_over200 / count を返す。
+
+    値が学習データに無い場合（未知の父馬・調教師等）のデフォルト値は、
+    学習時に実際使われたfillna値（fallback_medians、モデルpklに保存済み）
+    を優先的に使う。無い場合はstats_dfから中央値を近似計算し、それも
+    無ければ最終手段としてGLOBAL_MEAN定数を使う。
+
+    【背景】以前はハードコードされた GLOBAL_MEAN=80.0 を常に使っていたが、
+    実際の学習時中央値（sire/trainer/farm/bms_nameいずれも96〜98%程度）と
+    大きくズレており、未知の値を含む予測（特に学習データの薄い
+    小規模クラブ）が系統的に歪んでいた（2026-09-23未明、夜間のクラブ
+    拡張検証中に発見）。
+
     モデルC（kakutoku）の集計テーブルには smooth_over200 列が無いため、
     その場合はデフォルト値で補う。
     """
+    mean_col = f"{key_col}_smooth_mean"
     over200_col = f"{key_col}_smooth_over200"
+    fallback_medians = fallback_medians or {}
+    if mean_col in fallback_medians:
+        default_mean = fallback_medians[mean_col]
+    elif stats_df is not None and mean_col in stats_df.columns:
+        default_mean = float(stats_df[mean_col].median())
+    else:
+        default_mean = GLOBAL_MEAN
+    if over200_col in fallback_medians:
+        default_over200 = fallback_medians[over200_col]
+    elif stats_df is not None and over200_col in stats_df.columns:
+        default_over200 = float(stats_df[over200_col].median())
+    else:
+        default_over200 = GLOBAL_OVER200
     if stats_df is None or not value:
-        return GLOBAL_MEAN, GLOBAL_OVER200, 0
+        return default_mean, default_over200, 0
     row = stats_df[stats_df[key_col].astype(str) == str(value)]
     if len(row) == 0:
-        return GLOBAL_MEAN, GLOBAL_OVER200, 0
+        return default_mean, default_over200, 0
     return (
         float(row[f"{key_col}_smooth_mean"].values[0]),
-        float(row[over200_col].values[0]) if over200_col in row.columns else GLOBAL_OVER200,
+        float(row[over200_col].values[0]) if over200_col in row.columns else default_over200,
         int(row[f"{key_col}_count"].values[0]),
     )
 
@@ -154,7 +180,7 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
 
     for col in aggs.keys():
         val = _resolve_value(req, col)
-        m, o, c = _lookup(val, aggs.get(col), col)
+        m, o, c = _lookup(val, aggs.get(col), col, saved.get("fallback_medians"))
         row[f"{col}_smooth_mean"]    = m
         row[f"{col}_smooth_over200"] = o
         row[f"{col}_count"]          = c
@@ -192,7 +218,7 @@ def build_factors(req, saved: dict, shap_map: dict) -> list:
         if col not in aggs:
             continue
         val = _resolve_value(req, col)
-        m, o, c = _lookup(val, aggs.get(col), col)
+        m, o, c = _lookup(val, aggs.get(col), col, saved.get("fallback_medians"))
         shap_val = _grouped_shap(col, shap_map)
         if c == 0:
             factors.append({
@@ -288,7 +314,7 @@ def build_general_factors(req, saved: dict, shap_map: dict) -> list:
         if col not in aggs:
             continue
         val = _resolve_value(req, col)
-        m, o, c = _lookup(val, aggs.get(col), col)
+        m, o, c = _lookup(val, aggs.get(col), col, saved.get("fallback_medians"))
         shap_val = _grouped_shap(col, shap_map)
         if c == 0:
             factors.append({
@@ -324,17 +350,21 @@ def _percentile_of(value: float, reference: np.ndarray) -> float:
 
 def _ensemble_kakutoku(saved: dict, X: pd.DataFrame) -> float:
     """
-    huber回帰の予測（万円単位の絶対値）とlambdarankの予測（学習データ内での
-    相対スコアのみで単位を持たない）を、学習プール全体でのパーセンタイル
-    順位に変換してから平均し、huber分布の同パーセンタイル値に逆変換して
-    万円単位の1つの予測値に戻す（train_model_kakutoku.pyのdocstring参照）。
+    huber回帰の予測（log1p(万円)空間、2026-09-23に生の万円から変更。
+    kakutoku_manは極端な右裾分布のため生の値のままだと少数の超高額馬に
+    予測が支配されてほぼ一定値になってしまうバグがあった）とlambdarankの
+    予測（学習データ内での相対スコアのみで単位を持たない）を、学習プール
+    全体でのパーセンタイル順位に変換してから平均し、huber分布の同
+    パーセンタイル値に逆変換したのち、expm1で万円単位の実スケールに戻す
+    （train_model_kakutoku.pyのdocstring参照）。
     """
     huber_pred = float(saved["huber_model"].predict(X)[0])
     rank_pred  = float(saved["rank_model"].predict(X)[0])
     huber_pct = _percentile_of(huber_pred, saved["ref_huber_preds"])
     rank_pct  = _percentile_of(rank_pred, saved["ref_rank_scores"])
     ensemble_pct = (huber_pct + rank_pct) / 2
-    return float(np.quantile(saved["ref_huber_preds"], ensemble_pct))
+    log_result = np.quantile(saved["ref_huber_preds"], ensemble_pct)
+    return float(np.expm1(log_result))
 
 
 def run_general_predict(req) -> Optional[dict]:

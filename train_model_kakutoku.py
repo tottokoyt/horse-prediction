@@ -100,26 +100,33 @@ def load_combined():
 
     # バヌーシー自身の実データ（本来のターゲットドメイン、53頭・
     # experiment_add_banushi.pyの5-fold CVでspearman相関の一貫した改善を
-    # 確認済み）も学習プールに含める
-    banushi_path = DATA_DIR / "jisseki_banushi.csv"
-    banushi_pedigree_path = DATA_DIR / "banushi_pedigree_cache.csv"
-    if banushi_path.exists() and banushi_pedigree_path.exists():
-        banushi = pd.read_csv(banushi_path, encoding="utf-8-sig")
-        banushi = banushi[banushi["bosyu_year"].isin(TRAIN_YEARS)].copy()
-        banushi["price_man"] = pd.to_numeric(banushi["price_man"], errors="coerce")
-        banushi["club_name"] = "banushi"
-        banushi_pedigree = pd.read_csv(banushi_pedigree_path, encoding="utf-8-sig")[
-            ["horse_id", "sire", "bms_name"]
-        ]
-        banushi = pd.merge(banushi, banushi_pedigree, on="horse_id", how="left")
-        for c in cols:
-            if c not in banushi.columns:
-                banushi[c] = np.nan
-        dfs.append(banushi[cols])
+    # 確認済み）と、tclionクラブ（フェーズ9の11クラブ真LOCO検証で
+    # spearman相関の緩やかな改善を確認済み、2026-09-23）を学習プールに含める
+    for extra_name in ["banushi", "tclion"]:
+        extra_df = _load_extra_club(extra_name, cols)
+        if extra_df is not None:
+            dfs.append(extra_df)
 
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined.dropna(subset=["kaishuu_rate", "kakutoku_man", "price_man"]).reset_index(drop=True)
     return combined
+
+
+def _load_extra_club(name, cols):
+    path = DATA_DIR / f"jisseki_{name}.csv"
+    pedigree_path = DATA_DIR / f"{name}_pedigree_cache.csv"
+    if not (path.exists() and pedigree_path.exists()):
+        return None
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df = df[df["bosyu_year"].isin(TRAIN_YEARS)].copy()
+    df["price_man"] = pd.to_numeric(df["price_man"], errors="coerce")
+    df["club_name"] = name
+    pedigree = pd.read_csv(pedigree_path, encoding="utf-8-sig")[["horse_id", "sire", "bms_name"]]
+    df = pd.merge(df, pedigree, on="horse_id", how="left")
+    for c in cols:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df[cols]
 
 
 # ──────────────────────────────────────────
@@ -198,6 +205,29 @@ def make_relevance(kaishuu_rate):
     return pd.cut(kaishuu_rate, bins=bins, labels=[0, 1, 2]).astype(int)
 
 
+def compute_fallback_medians(tr):
+    """
+    学習データ(tr, add_features適用後)から、各smooth_mean列の中央値
+    （＝add_features内部でfillnaに実際使われた値とほぼ一致）を取り出す。
+    predictor.py の推論時、未知の値（学習データに無い
+    sire/trainer/farm/bms_name等）に対してこの値を使うことで、
+    学習時と推論時のフォールバック値を一致させる。
+
+    【重要な過去のバグ】以前はpredictor.py側でハードコードされた
+    GLOBAL_MEAN=80.0 を未知値のフォールバックに使っており、実際の
+    中央値（sire/trainer/farm/bms_nameいずれも96〜98%程度）と
+    大きくズレていた。学習データの薄い小規模クラブほど未知値の
+    割合が高いため、この不整合はモデルC（クラブ横断汎用モデル）の
+    実際の予測精度に系統的な悪影響を与えていた（2026-09-23未明、
+    夜間のクラブ拡張検証中に発見）。
+    """
+    medians = {}
+    for col in tr.columns:
+        if col.endswith("_smooth_mean"):
+            medians[col] = float(tr[col].median())
+    return medians
+
+
 # ──────────────────────────────────────────
 # モデル学習（huber回帰 + lambdarank のランクアンサンブル）
 # ──────────────────────────────────────────
@@ -250,12 +280,12 @@ def ensemble_score_batch(huber_preds, rank_preds):
 
 
 def evaluate(huber_model, rank_model, X_val, df_val):
-    huber_pred = huber_model.predict(X_val)
+    huber_pred = huber_model.predict(X_val)  # log1p空間
     rank_pred  = rank_model.predict(X_val)
-    ens_score  = ensemble_score_batch(huber_pred, rank_pred)
+    ens_score  = ensemble_score_batch(huber_pred, rank_pred)  # 単調変換なのでrank基準の順位は不変
 
     df_eval = df_val[["horse_name", "club_name", "kaishuu_rate", "kakutoku_man", "price_man"]].copy().reset_index(drop=True)
-    df_eval["pred_kakutoku_man"] = huber_pred
+    df_eval["pred_kakutoku_man"] = np.expm1(huber_pred)  # 表示用に実スケールへ戻す
     df_eval["ensemble_score"]    = ens_score
 
     thr      = df_eval["ensemble_score"].quantile(0.75)
@@ -310,8 +340,15 @@ def main():
     feature_cols = get_feature_cols(tr)
     print(f"\n特徴量 ({len(feature_cols)}個): {feature_cols}")
 
+    fallback_medians = compute_fallback_medians(tr)
+    print(f"未知値フォールバック中央値: { {k: round(v,1) for k,v in fallback_medians.items()} }")
+
     X_tr = tr[feature_cols].fillna(-1)
-    y_tr = tr["kakutoku_man"]
+    # kakutoku_man（獲得賞金）は極端な右裾分布（上位1%の馬で総額の約25%を
+    # 占める）のため、生の値をhuber回帰の目的変数にすると少数の超高額馬に
+    # 支配されて予測がほぼ一定値に潰れる（2026-09-23発見）。log1pで
+    # 圧縮してから学習し、推論時（predictor.py側）にexpm1で戻す。
+    y_tr = np.log1p(tr["kakutoku_man"])
     X_ho = ho[feature_cols].fillna(-1)
 
     y_relevance = make_relevance(tr["kaishuu_rate"])
@@ -345,13 +382,14 @@ def main():
     save_importance(huber_model, feature_cols, suffix="_huber")
 
     joblib.dump({
-        "huber_model":     huber_model,
-        "rank_model":      rank_model,
-        "ref_huber_preds": ref_huber_preds,
-        "ref_rank_scores": ref_rank_scores,
-        "feature_cols":    feature_cols,
-        "aggs":            aggs,
-        "model_type":      "kakutoku_ensemble",
+        "huber_model":       huber_model,
+        "rank_model":        rank_model,
+        "ref_huber_preds":   ref_huber_preds,
+        "ref_rank_scores":   ref_rank_scores,
+        "feature_cols":      feature_cols,
+        "aggs":              aggs,
+        "fallback_medians":  fallback_medians,
+        "model_type":        "kakutoku_ensemble",
     }, MODEL_DIR / "lgbm_model_kakutoku.pkl")
     print("\nモデル保存: models/lgbm_model_kakutoku.pkl")
 
