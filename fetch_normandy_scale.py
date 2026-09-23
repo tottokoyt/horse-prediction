@@ -40,9 +40,13 @@ SCALE_CACHE = DATA_DIR / "other_scale_cache.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 TARGET_URL = "http://www.normandyoc.com/collect/height.aspx"
+# 2022年分も取得できる（2022を足せば data/other_scale_cache.csv に追記される）が、
+# experiment_scale_2022.py で学習に入れても精度が上がらなかった（測尺4クラブで
+# 上位25%差分 -1.2±0.9pt）ため、本番用のキャッシュは2018-2021年分のままにしている。
+# 2022年分を含むものは data/other_scale_cache_with2022.csv に保存してある
 TRAIN_YEARS = [2018, 2019, 2020, 2021]
 # 学習年度の募集期間をカバーするキャプチャ範囲
-CAPTURE_FROM, CAPTURE_TO = "2018", "2022"
+CAPTURE_FROM, CAPTURE_TO = "2018", "2023"
 
 
 def list_captures():
