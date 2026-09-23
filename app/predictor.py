@@ -176,13 +176,12 @@ def build_feature_row(req, saved: dict) -> pd.DataFrame:
         "price_man":   req.price if req.price else -1,
     }
 
-    if req.height is not None:
-        row.update({
-            "height": req.height,
-            "chest":  req.chest,
-            "cannon": req.cannon,
-            "weight": req.weight,
-        })
+    # 測尺は1項目ずつ扱う（モデルCは学習時も一部項目だけの馬がいる。例: unionは体重なし）。
+    # 未入力の項目は下の fillna(-1) で学習時と同じ欠損扱いになる
+    for col in ("height", "chest", "cannon", "weight"):
+        v = getattr(req, col, None)
+        if v is not None:
+            row[col] = v
 
     for col in aggs.keys():
         val = _resolve_value(req, col)
@@ -304,8 +303,9 @@ def get_general_verdict(pred_kaishuu_rate: Optional[float]) -> Optional[str]:
 # ── モデルC（獲得賞金・クラブ非依存汎用モデル）のファクター ──────
 def build_general_factors(req, saved: dict, shap_map: dict) -> list:
     """
-    モデルCは全クラブ共通の sire/trainer/farm/bms_name/生月/募集価格のみを
-    使う（測尺・配合ニックは使わない）ため、モデルA/Bとは別の一覧を作る。
+    モデルCは全クラブ共通の sire/trainer/farm/bms_name/生月/募集価格と、
+    入力があれば測尺（2026-09-23追加）を使う。配合ニックは使わないため、
+    モデルA/Bとは別の一覧を作る。
     """
     aggs    = saved["aggs"]
     factors = []
@@ -342,6 +342,21 @@ def build_general_factors(req, saved: dict, shap_map: dict) -> list:
         factors.append({
             "name":   "生月",
             "value":  f"{req.birth_month}月生まれ",
+            "impact": _impact_from_shap(shap_val, SHAP_EPSILON_C),
+            "shap":   round(shap_val, 4),
+        })
+
+    # 測尺（学習済みモデルが測尺を使っている場合のみ。古いpklとの互換のため確認する）
+    feature_cols = saved["feature_cols"]
+    for col, label, unit in [("height", "体高", "cm"), ("chest", "胸囲", "cm"),
+                             ("cannon", "管囲", "cm"), ("weight", "体重", "kg")]:
+        v = getattr(req, col, None)
+        if v is None or col not in feature_cols:
+            continue
+        shap_val = shap_map.get(col, 0.0)
+        factors.append({
+            "name":   label,
+            "value":  f"{v}{unit}",
             "impact": _impact_from_shap(shap_val, SHAP_EPSILON_C),
             "shap":   round(shap_val, 4),
         })

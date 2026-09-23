@@ -425,7 +425,7 @@
     <div class="scale-section">
       <label class="scale-toggle">
         <input type="checkbox" id="use-scale" onchange="toggleScale()">
-        <span>測尺データを入力する（モデルA使用）</span>
+        <span>測尺データを入力する（モデルA・クラブ横断モデルで使用）</span>
       </label>
       <div class="scale-fields" id="scale-fields">
         <div class="row2">
@@ -511,6 +511,8 @@
           <p style="font-size:12px; color:var(--text2); margin:0 0 12px;">
             シルクに限らず全クラブのデータで学習した汎用モデルの予測です。
             募集金額から回収率を逆算しているため、シルク以外のクラブの馬にも参考になります。
+            測尺を入力すると考慮します（一部の項目だけでも可）。検証では、測尺は上位の馬の
+            選別をやや改善しましたが、全体の順位の当たりやすさはほぼ変わりませんでした。
           </p>
           <p style="font-size:14px; margin:0 0 12px;">
             予測獲得賞金: <strong id="general-kakutoku">-</strong>万円

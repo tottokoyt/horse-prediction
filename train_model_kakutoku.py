@@ -23,9 +23,20 @@ train_model_kakutoku.py
 
 学習データ:
   シルク+他クラブ全11クラブ+バヌーシー自身、学習年度(2018-2021)分
-  すべてをプールして学習に使う。測尺（体高等）は全クラブ揃っていない
-  ため特徴量に含めない（sire/trainer/farm/bms_name/price_man/sex/
-  birth_month のみ）。
+  すべてをプールして学習に使う。特徴量は sire/trainer/farm/bms_name/
+  price_man/sex/birth_month と、測尺（体高・胸囲・管囲・体重）。
+
+  測尺は「あれば使う」特徴量（2026-09-23追加、PLAN_measurement_expansion.md）:
+  公開データがあるのは silk（merged_train.csv）と carrot/normandy/union
+  （Wayback Machine から復元した data/other_scale_cache.csv、unionは体重なし）
+  のみで、学習プール2,472頭中717頭。それ以外のクラブは欠損（-1）。
+  experiment_measurement_placebo.py（測尺4クラブ×20試行のLOCO、
+  クラブ×年度内で測尺値をシャッフルしたプラセボ対照つき）で、
+  生値のまま追加すると上位25%差分が 4.0→7.7pt（+3.6±0.7、17/20試行で改善、
+  プラセボは+0.2）と改善することを確認した。一方 spearman は変わらない
+  （0.045→0.045）ので「上位の馬の選別が良くなる」効果に限られる。
+  クラブ×年度内で標準化した方がわずかに良かった（上位25%差分8.5）が、
+  推論時に同世代全頭の測尺が必要になるため、生値を採用した。
 
   バヌーシー自身の53頭（本来のターゲットドメインの実データ）を学習に
   含めるかどうかは experiment_add_banushi.py で5-fold CVにより検証した。
@@ -75,6 +86,9 @@ HOLDOUT_FRAC = 0.15  # 最終モデルの健全性チェック用ランダムホ
 # データ読み込み・統合
 # ──────────────────────────────────────────
 
+SCALE_COLS = ["height", "chest", "cannon", "weight"]
+
+
 def load_combined():
     silk = pd.read_csv(DATA_DIR / "merged_train.csv", encoding="utf-8-sig")
     silk = silk.copy()
@@ -93,9 +107,13 @@ def load_combined():
     other = pd.merge(other, bms, on="horse_id", how="left")
     sire = pd.read_csv(DATA_DIR / "sire_other_cache.csv", encoding="utf-8-sig")[["horse_id", "sire"]]
     other = pd.merge(other, sire, on="horse_id", how="left")
+    # 測尺（carrot/normandy/union のみ。fetch_normandy_scale.py / fetch_union_scale.py /
+    # archive/merge_carrot_scale.py で作成。他クラブは NaN のまま）
+    scale = pd.read_csv(DATA_DIR / "other_scale_cache.csv", encoding="utf-8-sig")[["horse_id"] + SCALE_COLS]
+    other = pd.merge(other, scale, on="horse_id", how="left")
 
-    cols = ["club_name", "horse_name", "sire", "trainer", "farm", "bms_name", "sex", "birth_month",
-            "price_man", "kaishuu_rate", "kakutoku_man"]
+    cols = ["club_name", "horse_name", "bosyu_year", "sire", "trainer", "farm", "bms_name", "sex",
+            "birth_month", "price_man", "kaishuu_rate", "kakutoku_man"] + SCALE_COLS
     dfs = [silk[cols], other[cols]]
 
     # バヌーシー自身の実データ（本来のターゲットドメイン、53頭・
@@ -191,7 +209,7 @@ def add_features(df, aggs):
     return df.reset_index(drop=True)
 
 
-FEATURE_BASE = ["sex_num", "birth_month", "price_man"]
+FEATURE_BASE = ["sex_num", "birth_month", "price_man"] + SCALE_COLS
 
 
 def get_feature_cols(df):
