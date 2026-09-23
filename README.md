@@ -18,8 +18,9 @@
 
 **現状の結論**: 未知クラブへの汎化を狙うなら **モデルC**
 （`train_model_kakutoku.py`、獲得賞金の回帰予測＋推論時に募集金額で
-回収率換算）を使う。モデルA/Bはシルク固有の予測精度は高いが、
-バヌーシーのような未知クラブへの汎化は保証されない。
+回収率換算）を使う。2026-09-23にモデルCへ測尺（体高・胸囲・管囲・体重）を
+「あれば使う」特徴量として組み込み、シルク特化のモデルA/Bはアプリから廃止した
+（経緯と検証結果は `PLAN_measurement_expansion.md`）。
 
 ## 実行順序
 
@@ -71,19 +72,21 @@ python fetch_sire_other.py
 
 # ── モデル学習 ────────────────────────────────────────────
 
-# 10. モデル学習（最新版）
-python train_model_v9.py       # モデルA（測尺あり・シルク寄り）: BMS + 配合ニック(父×母父)
-python train_model_B_v7.py     # モデルB（測尺なし・シルク寄り）: BMS 追加版
-python train_model_kakutoku.py # モデルC（クラブ非依存・未知クラブ向け）: 獲得賞金回帰
-# -> models/lgbm_model_A_v9.pkl, models/lgbm_model_B_v7.pkl, models/lgbm_model_kakutoku.pkl
+# 10. 測尺データ（Wayback Machine から募集時の値を復元。data/other_scale_cache.csv に追記）
+python fetch_normandy_scale.py
+python fetch_union_scale.py
+# carrot 分は archive/fetch_carrot_scale.py + archive/merge_carrot_scale.py（取得済み）
+
+# 11. モデル学習
+python train_model_kakutoku.py # モデルC（クラブ横断）: 獲得賞金回帰
+# -> models/lgbm_model_kakutoku.pkl
 
 # ── Webアプリ ─────────────────────────────────────────────
 
-# 11. FastAPIサーバー起動
+# 12. FastAPIサーバー起動
 uvicorn app.main:app --reload
-# app/predictor.py が読み込むモデルを指定（現在: A=v9, B=v7, C=kakutoku）
-# モデルA/Bの予測に加え、常にモデルC（クラブ横断・参考値）の予測も
-# 一緒に返す。起動時にSHAP（shap.TreeExplainer）を初期化するため、
+# app/predictor.py はモデルC（lgbm_model_kakutoku.pkl）のみを読み込む。
+# 測尺は任意入力（一部の項目だけでも可）。起動時にSHAP（shap.TreeExplainer）を初期化するため、
 # 初回リクエストが返るまで（numbaのJITコンパイルで）15〜20秒ほどかかる
 # 場合があります
 ```
@@ -113,7 +116,7 @@ uvicorn app.main:app --reload
 
 ## モデルの特徴量
 
-**モデルA（v9） / モデルB（B_v7）** — シルクの実学習行（Aは634頭、Bは
+**モデルA（v9） / モデルB（B_v7）【2026-09-23 廃止】** — シルクの実学習行（Aは634頭、Bは
 他クラブ2018-2021分込みで2,893頭）で学習。sire・trainer・farm・bms_name
 （母父）ごとの smooth_mean / smooth_over200 / count に加え、モデルAには
 `nick`（父×母父の組み合わせ＝配合ニック）を追加。集計プールは他クラブの
@@ -125,9 +128,9 @@ uvicorn app.main:app --reload
 **モデルC（kakutoku）** — 全12クラブ（シルク+他10+バヌーシー）の学習年度
 (2018-2021)分、計2,839頭をプールして学習（バヌーシー追加の経緯は
 下記「バヌーシー自身のデータを学習に追加」参照）。特徴量は
-性別・生まれ月・募集金額・sire/trainer/farm/bms_nameのsmooth_mean/count
-のみ（測尺・配合ニックは使わない。全クラブで揃っている項目に絞ることで
-未知クラブへの汎化を優先）。回収率ではなく **獲得賞金（kakutoku_man）を
+性別・生まれ月・募集金額・sire/trainer/farm/bms_nameのsmooth_mean/count、
+および測尺（体高・胸囲・管囲・体重。2026-09-23追加、silk/carrot/normandy/union の
+717頭のみ実値で他は欠損扱い）。配合ニックは使わない。回収率ではなく **獲得賞金（kakutoku_man）を
 huber回帰 + lambdarank（ランキング目的関数）のランクアンサンブルで予測**
 し、推論時に入力された募集金額で `回収率 = 予測獲得賞金 / 募集金額 × 100`
 と逆算する。1頭ずつの予測では、huber予測とlambdarankスコアを学習プール

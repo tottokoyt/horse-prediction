@@ -175,61 +175,13 @@
   .verdict-badge.negative { background: var(--red-bg);   color: var(--red);   border: 1px solid var(--red); }
   .verdict-badge.neutral  { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
 
-  /* ── Prob Bars ── */
+  /* ── Prediction summary ── */
   .prob-section {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 20px;
     margin-bottom: 20px;
-  }
-  .prob-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text2);
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    margin-bottom: 16px;
-  }
-  .prob-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .prob-row:last-child { margin-bottom: 0; }
-  .prob-label { font-size: 13px; width: 100px; flex-shrink: 0; }
-  .prob-bar-wrap {
-    flex: 1;
-    background: var(--surface2);
-    border-radius: 4px;
-    height: 20px;
-    overflow: hidden;
-  }
-  .prob-bar {
-    height: 100%;
-    border-radius: 4px;
-    transition: width .6s cubic-bezier(.4,0,.2,1);
-    width: 0;
-  }
-  .prob-bar.c0 { background: var(--red); }
-  .prob-bar.c1 { background: var(--yellow); }
-  .prob-bar.c2 { background: var(--green); }
-  .prob-pct {
-    font-size: 13px;
-    font-weight: 700;
-    width: 48px;
-    text-align: right;
-    flex-shrink: 0;
-  }
-  .prob-pct.c0 { color: var(--red); }
-  .prob-pct.c1 { color: var(--yellow); }
-  .prob-pct.c2 { color: var(--green); }
-  .predicted-arrow {
-    font-size: 11px;
-    color: var(--accent2);
-    width: 52px;
-    flex-shrink: 0;
   }
 
   /* ── Factors ── */
@@ -328,12 +280,6 @@
       font-size: 16px;
     }
 
-    /* Prob rows: tighter on narrow screens */
-    .prob-label { width: 76px; font-size: 12px; }
-    .prob-pct   { width: 38px; font-size: 12px; }
-    .predicted-arrow { width: 34px; font-size: 10px; }
-    .prob-row { gap: 8px; }
-
     /* Factors: dot+name on first line, value wraps below */
     .factor-row {
       flex-wrap: wrap;
@@ -365,7 +311,7 @@
   <span class="logo">🏇</span>
   <div>
     <h1>競走馬 回収率予測システム</h1>
-    <div class="sub">一口馬主 回収率予測モデル（LightGBM v7）</div>
+    <div class="sub">一口馬主 獲得賞金・回収率予測（クラブ横断モデル）</div>
   </div>
 </header>
 
@@ -425,7 +371,7 @@
     <div class="scale-section">
       <label class="scale-toggle">
         <input type="checkbox" id="use-scale" onchange="toggleScale()">
-        <span>測尺データを入力する（モデルA・クラブ横断モデルで使用）</span>
+        <span>測尺データを入力する（任意・一部の項目だけでも可）</span>
       </label>
       <div class="scale-fields" id="scale-fields">
         <div class="row2">
@@ -472,53 +418,26 @@
       <div class="result-content" id="result-content">
 
         <div class="result-header">
-          <span class="badge-model" id="badge-model">モデルB</span>
+          <span class="badge-model">クラブ横断モデル（獲得賞金ベース）</span>
           <span class="verdict-badge" id="verdict-badge">---</span>
         </div>
 
         <div class="prob-section">
-          <div class="prob-title">クラス別確率</div>
-          <div class="prob-row">
-            <span class="prob-label">100%未満</span>
-            <div class="prob-bar-wrap"><div class="prob-bar c0" id="bar0"></div></div>
-            <span class="prob-pct c0" id="pct0">0%</span>
-            <span class="predicted-arrow" id="arrow0"></span>
-          </div>
-          <div class="prob-row">
-            <span class="prob-label">100〜200%</span>
-            <div class="prob-bar-wrap"><div class="prob-bar c1" id="bar1"></div></div>
-            <span class="prob-pct c1" id="pct1">0%</span>
-            <span class="predicted-arrow" id="arrow1"></span>
-          </div>
-          <div class="prob-row">
-            <span class="prob-label">200%超</span>
-            <div class="prob-bar-wrap"><div class="prob-bar c2" id="bar2"></div></div>
-            <span class="prob-pct c2" id="pct2">0%</span>
-            <span class="predicted-arrow" id="arrow2"></span>
-          </div>
+          <p style="font-size:14px; margin:0 0 12px;">
+            予測獲得賞金: <strong id="pred-kakutoku">-</strong>万円
+            <span id="pred-kaishuu-wrap"> ／ 予測回収率: <strong id="pred-kaishuu">-</strong>%</span>
+          </p>
+          <p style="font-size:12px; color:var(--text2); margin:0;">
+            全クラブのデータで学習したモデルの予測です。回収率は募集総額から逆算しており、
+            募集総額を入力すると表示されます。測尺を入力すると考慮します（一部の項目だけでも可）。
+            検証では、測尺は上位の馬の選別をやや改善しましたが、全体の順位の当たりやすさは
+            ほぼ変わりませんでした。
+          </p>
         </div>
 
         <div class="factors-section">
           <div class="factors-title">影響要因</div>
           <div id="factors-list"></div>
-        </div>
-
-        <div class="factors-section" id="general-section" style="display:none;">
-          <div class="factors-title">
-            クラブ横断モデル（獲得賞金ベース・参考値）
-            <span class="verdict-badge" id="general-verdict-badge" style="margin-left:8px;"></span>
-          </div>
-          <p style="font-size:12px; color:var(--text2); margin:0 0 12px;">
-            シルクに限らず全クラブのデータで学習した汎用モデルの予測です。
-            募集金額から回収率を逆算しているため、シルク以外のクラブの馬にも参考になります。
-            測尺を入力すると考慮します（一部の項目だけでも可）。検証では、測尺は上位の馬の
-            選別をやや改善しましたが、全体の順位の当たりやすさはほぼ変わりませんでした。
-          </p>
-          <p style="font-size:14px; margin:0 0 12px;">
-            予測獲得賞金: <strong id="general-kakutoku">-</strong>万円
-            <span id="general-kaishuu-wrap"> ／ 予測回収率: <strong id="general-kaishuu">-</strong>%</span>
-          </p>
-          <div id="general-factors-list"></div>
         </div>
 
       </div>
@@ -584,25 +503,20 @@ async function doPrediction() {
 }
 
 function renderResult(data) {
-  // モデルバッジ
-  const modelLabel = data.model_used === 'A'
-    ? 'モデルA（測尺あり・精密版）'
-    : 'モデルB（測尺なし・汎用版）';
-  document.getElementById('badge-model').textContent = modelLabel;
-
-  // 判定バッジ
+  // 判定バッジ（募集総額が無いと回収率を出せないので判定も出ない）
   const verdictEl = document.getElementById('verdict-badge');
-  verdictEl.textContent = data.verdict;
-  verdictEl.className = 'verdict-badge ' + verdictClass(data.verdict);
+  verdictEl.textContent = data.verdict || '';
+  verdictEl.className = 'verdict-badge ' + verdictClass(data.verdict || '');
+  verdictEl.style.display = data.verdict ? '' : 'none';
 
-  // 確率バー
-  data.prob.forEach((p, i) => {
-    const pct = (p * 100).toFixed(1);
-    document.getElementById('bar' + i).style.width = pct + '%';
-    document.getElementById('pct' + i).textContent = pct + '%';
-    document.getElementById('arrow' + i).textContent =
-      i === data.pred_class ? '← 予測' : '';
-  });
+  document.getElementById('pred-kakutoku').textContent = data.pred_kakutoku_man.toLocaleString();
+  const kaishuuWrap = document.getElementById('pred-kaishuu-wrap');
+  if (data.pred_kaishuu_rate !== null) {
+    kaishuuWrap.style.display = '';
+    document.getElementById('pred-kaishuu').textContent = data.pred_kaishuu_rate;
+  } else {
+    kaishuuWrap.style.display = 'none';
+  }
 
   // ファクター
   const list = document.getElementById('factors-list');
@@ -613,35 +527,6 @@ function renderResult(data) {
       <div class="factor-value">${f.value}</div>
     </div>
   `).join('');
-
-  // クラブ横断モデル（獲得賞金ベース）
-  const generalSection = document.getElementById('general-section');
-  if (data.general) {
-    generalSection.style.display = '';
-    document.getElementById('general-kakutoku').textContent = data.general.pred_kakutoku_man.toLocaleString();
-    const kaishuuWrap = document.getElementById('general-kaishuu-wrap');
-    if (data.general.pred_kaishuu_rate !== null) {
-      kaishuuWrap.style.display = '';
-      document.getElementById('general-kaishuu').textContent = data.general.pred_kaishuu_rate;
-    } else {
-      kaishuuWrap.style.display = 'none';
-    }
-    const gVerdictEl = document.getElementById('general-verdict-badge');
-    gVerdictEl.textContent = data.general.verdict || '';
-    gVerdictEl.className = 'verdict-badge ' + verdictClass(data.general.verdict || '');
-    gVerdictEl.style.display = data.general.verdict ? '' : 'none';
-
-    const gList = document.getElementById('general-factors-list');
-    gList.innerHTML = data.general.factors.map(f => `
-      <div class="factor-row">
-        <div class="factor-dot ${f.impact}"></div>
-        <div class="factor-name">${f.name}</div>
-        <div class="factor-value">${f.value}</div>
-      </div>
-    `).join('');
-  } else {
-    generalSection.style.display = 'none';
-  }
 
   document.getElementById('result-content').classList.add('active');
 
