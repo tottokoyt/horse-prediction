@@ -19,3 +19,8 @@ models/feature_importance*.csv
 
 # OS
 .DS_Store
+
+# 実行ログ・引退したモデルの手元コピー
+*.log
+models/_retired/
+.Rhistory
