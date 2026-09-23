@@ -52,6 +52,7 @@ SEEDS = tuple(range(1, 6))
 SCALE_COLS = ["height", "chest", "cannon", "weight"]
 MEASURED_CLUBS = ["silk", "carrot", "normandy", "union"]
 VARIANTS = ["なし", "生値", "標準化", "シャッフル"]
+EXPERIMENT_YEARS = [2018, 2019, 2020, 2021]
 
 
 def log(msg):
@@ -62,7 +63,8 @@ def load_pool_with_scale():
     """load_combined() と同じ学習プールに、測尺4列と bosyu_year を付与する"""
     # load_combined は2026-09-23から測尺・bosyu_year を含むようになったが、
     # この実験は silk の同名馬除外など独自の突き合わせで作った列を使うので落としておく
-    pool = tmk.load_combined().drop(columns=SCALE_COLS + ["bosyu_year"], errors="ignore")
+    # 学習年度は2026-09-23に2022年まで広げたが、この実験は2018-2021年で行ったので固定する
+    pool = tmk.load_combined(EXPERIMENT_YEARS).drop(columns=SCALE_COLS + ["bosyu_year"], errors="ignore")
 
     # load_combined は horse_id を落とすので、同じ順序で読み直して測尺を横付けする
     silk = pd.read_csv(DATA_DIR / "merged_train.csv", encoding="utf-8-sig")
@@ -71,7 +73,7 @@ def load_pool_with_scale():
     silk_scale["bosyu_year"] = silk["bosyu_year"] if "bosyu_year" in silk.columns else np.nan
 
     other = pd.read_csv(DATA_DIR / "jisseki_other_all.csv", encoding="utf-8-sig")
-    other = other[other["bosyu_year"].isin(tmk.TRAIN_YEARS)]
+    other = other[other["bosyu_year"].isin(EXPERIMENT_YEARS)]
     scale = pd.read_csv(DATA_DIR / "other_scale_cache.csv", encoding="utf-8-sig")[["horse_id"] + SCALE_COLS]
     other_scale = pd.merge(other[["horse_id", "horse_name", "club_name", "bosyu_year"]], scale,
                            on="horse_id", how="left").drop(columns="horse_id")

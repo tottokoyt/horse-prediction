@@ -22,14 +22,15 @@ train_model_kakutoku.py
   「平均も分散も同時に改善する」数少ないケースだったため採用した。
 
 学習データ:
-  シルク+他クラブ全11クラブ+バヌーシー自身、学習年度(2018-2021)分
+  シルク+他クラブ全11クラブ+バヌーシー自身、学習年度(2018-2022)分
   すべてをプールして学習に使う。特徴量は sire/trainer/farm/bms_name/
   price_man/sex/birth_month と、測尺（体高・胸囲・管囲・体重）。
 
   測尺は「あれば使う」特徴量（2026-09-23追加、PLAN_measurement_expansion.md）:
   公開データがあるのは silk（merged_train.csv）と carrot/normandy/union
   （Wayback Machine から復元した data/other_scale_cache.csv、unionは体重なし）
-  のみで、学習プール2,472頭中717頭。それ以外のクラブは欠損（-1）。
+  のみで、2018-2021年の学習プール2,472頭中717頭（2022年分はsilkの78頭のみ）。
+  それ以外のクラブは欠損（-1）。
   experiment_measurement_placebo.py（測尺4クラブ×20試行のLOCO、
   クラブ×年度内で測尺値をシャッフルしたプラセボ対照つき）で、
   生値のまま追加すると上位25%差分が 4.0→7.7pt（+3.6±0.7、17/20試行で改善、
@@ -78,7 +79,12 @@ DATA_DIR  = Path("data")
 MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(exist_ok=True)
 
-TRAIN_YEARS = [2018, 2019, 2020, 2021]
+# 2022年募集（2021年産、2026年9月時点で5歳・まだ出走中）は2026-09-23に追加した。
+# experiment_add_2022.py（13クラブLOCO×10seed、評価は2018-2021年の馬）で、
+# spearman 0.087→0.095（+0.008±0.003、8/10seed）、上位25%差分 9.1→9.0（変化なし）と
+# 精度はほぼ同等。新しい種牡馬・調教師の実績を取り込めるため採用した。
+# 稼ぎ途中の世代を成熟世代に合わせる補正は効果が無かった（2022年の倍率は×0.97でほぼ不要）
+TRAIN_YEARS = [2018, 2019, 2020, 2021, 2022]
 HOLDOUT_FRAC = 0.15  # 最終モデルの健全性チェック用ランダムホールドアウト（クラブ問わず）
 
 
@@ -89,16 +95,18 @@ HOLDOUT_FRAC = 0.15  # 最終モデルの健全性チェック用ランダムホ
 SCALE_COLS = ["height", "chest", "cannon", "weight"]
 
 
-def load_combined():
-    silk = pd.read_csv(DATA_DIR / "merged_train.csv", encoding="utf-8-sig")
-    silk = silk.copy()
+def load_combined(years=None):
+    """学習プールを作る。years を省略すると TRAIN_YEARS（本番の学習年度）"""
+    years = TRAIN_YEARS if years is None else years
+    silk = pd.read_csv(DATA_DIR / "merged_all.csv", encoding="utf-8-sig")
+    silk = silk[silk["bosyu_year"].isin(years)].copy()
     silk["club_name"] = "silk"
     silk["price_man"] = pd.to_numeric(silk["total_price_man"], errors="coerce")
     if "farm" not in silk.columns:
         silk["farm"] = silk["farm_x"] if "farm_x" in silk.columns else silk.get("farm_y")
 
     other = pd.read_csv(DATA_DIR / "jisseki_other_all.csv", encoding="utf-8-sig")
-    other = other[other["bosyu_year"].isin(TRAIN_YEARS)].copy()
+    other = other[other["bosyu_year"].isin(years)].copy()
     other["price_man"] = pd.to_numeric(other["price_man"], errors="coerce")
     if "birth_month" not in other.columns:
         other["birth_month"] = np.nan
@@ -121,7 +129,7 @@ def load_combined():
     # 確認済み）と、tclionクラブ（フェーズ9の11クラブ真LOCO検証で
     # spearman相関の緩やかな改善を確認済み、2026-09-23）を学習プールに含める
     for extra_name in ["banushi", "tclion"]:
-        extra_df = _load_extra_club(extra_name, cols)
+        extra_df = _load_extra_club(extra_name, cols, years)
         if extra_df is not None:
             dfs.append(extra_df)
 
@@ -130,13 +138,13 @@ def load_combined():
     return combined
 
 
-def _load_extra_club(name, cols):
+def _load_extra_club(name, cols, years):
     path = DATA_DIR / f"jisseki_{name}.csv"
     pedigree_path = DATA_DIR / f"{name}_pedigree_cache.csv"
     if not (path.exists() and pedigree_path.exists()):
         return None
     df = pd.read_csv(path, encoding="utf-8-sig")
-    df = df[df["bosyu_year"].isin(TRAIN_YEARS)].copy()
+    df = df[df["bosyu_year"].isin(years)].copy()
     df["price_man"] = pd.to_numeric(df["price_man"], errors="coerce")
     df["club_name"] = name
     pedigree = pd.read_csv(pedigree_path, encoding="utf-8-sig")[["horse_id", "sire", "bms_name"]]
